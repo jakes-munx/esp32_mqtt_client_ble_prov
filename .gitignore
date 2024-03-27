@@ -1,0 +1,35 @@
+build
+
+# Executables
+*.out
+*.hex
+
+# Lists
+*.map
+
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+*.d
+*.browse
+*.dep
+*.ninja
+*.ninja_deps
+*.ninja_log
+*.pbd
+*.pbi
+*.pbw
+*.xcl
+*.tmp
+*.bak
+
+# VSCode related
+.cortex-debug.*
+*.log
+
+# other folders
+.settings
+.vscode
+settings
