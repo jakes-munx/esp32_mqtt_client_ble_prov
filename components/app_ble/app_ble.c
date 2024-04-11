@@ -1,4 +1,4 @@
-#include <stdio.h>prov_print_qr
+#include <stdio.h>
 #include <string.h>
 
 #include <freertos/FreeRTOS.h>

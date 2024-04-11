@@ -1749,14 +1749,6 @@ CONFIG_WIFI_PROV_BLE_SEC_CONN=y
 CONFIG_WIFI_PROV_STA_ALL_CHANNEL_SCAN=y
 # CONFIG_WIFI_PROV_STA_FAST_SCAN is not set
 # end of Wi-Fi Provisioning Manager
-
-#
-# jsmn
-#
-# CONFIG_JSMN_PARENT_LINKS is not set
-# CONFIG_JSMN_STRICT is not set
-# CONFIG_JSMN_STATIC is not set
-# end of jsmn
 # end of Component config
 
 # CONFIG_IDF_EXPERIMENTAL_FEATURES is not set

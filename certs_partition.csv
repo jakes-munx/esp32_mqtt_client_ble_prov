@@ -1,0 +1,5 @@
+key,type,encoding,value
+certs,namespace,,
+client_key,file,string,client_certs/client.key
+client_crt,file,string,client_certs/client.crt
+sanity,data,string,"hello there"

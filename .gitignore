@@ -25,6 +25,14 @@ build
 *.tmp
 *.bak
 
+# certificates
+.crt
+.key
+.srl
+.csr
+
+.bin
+
 # VSCode related
 .cortex-debug.*
 *.log

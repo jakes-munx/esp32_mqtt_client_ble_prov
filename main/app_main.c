@@ -18,6 +18,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "protocol_examples_common.h"
+#include "nvs.h"
 
 #include "esp_log.h"
 #include "mqtt_client.h"
@@ -28,9 +29,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
+
 #include "rtc_wdt.h"
 #include "esp_task_wdt.h"
-
+#include "esp_mac.h"
 
 #ifdef CONFIG_IDF_TARGET_ESP32C3
 #include "driver/temperature_sensor.h"
@@ -38,6 +40,7 @@
 
 #include "app_ble.h"
 
+#define CERTS_NAMESPACE "certs"
 #define SEND_TELEMTRY_PERIOD_SECONDS    5
 static const uint32_t telem_send_period_ms = SEND_TELEMTRY_PERIOD_SECONDS * 1000;
 
@@ -45,6 +48,8 @@ static esp_mqtt_client_handle_t mqtt_client = NULL;
 static const char *TAG = "APP_MAIN";
 
 static const char telem_topic[] = "/topic/qos0";
+
+#define CERT_SIZE 2048
 
 #if CONFIG_BROKER_CERTIFICATE_OVERRIDDEN == 1
 static const uint8_t ca_start[]  = "-----BEGIN CERTIFICATE-----\n" CONFIG_BROKER_CERTIFICATE_OVERRIDE "\n-----END CERTIFICATE-----";
@@ -54,6 +59,11 @@ extern const uint8_t ca_start[]   asm("_binary_gtsr1_pem_start");
 #endif
 extern const uint8_t ca_end[]   asm("_binary_gtsr1_pem_nd");
 // extern const uint8_t ca_end[]   asm("_binary_mqtt_eclipseprojects_io_pem_end");
+
+// extern const uint8_t client_cert_pem_start[]   asm("_binary_client_crt_start");
+// extern const uint8_t client_key_pem_start[]   asm("_binary_client_key_start");
+char client_crt_arr[CERT_SIZE] = {0xFF};
+char client_key_arr[CERT_SIZE] = {0xFF};
 
 static char telem_data = 'A';
 static bool is_send_telem = false;
@@ -92,7 +102,7 @@ static void send_telemetery(esp_mqtt_client_handle_t client)
         ESP_LOGW(TAG,"Telemetry data too large, concatenated from %d to %d bytes", json_size, MAX_JSON_SIZE);
         json_size = MAX_JSON_SIZE;
     }
-    int msg_id = esp_mqtt_client_publish(client, &telem_topic, &telem_json, json_size, 0, 0);
+    int msg_id = esp_mqtt_client_publish(client, telem_topic, telem_json, json_size, 0, 0);
     ESP_LOGI(TAG, "telemetry sent with msg_id=%d", msg_id);
 }
 
@@ -174,16 +184,119 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
 static void mqtt_app_start(void)
 {
+    // const esp_partition_t *certs_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, "certs");
+    // #define CERT_SIZE 2048
+    // if (certs_part->address == 0)
+    // {
+    //     ESP_LOGE(TAG, "Failed to find =certs partition");
+    //     return;
+    // }
+    // ESP_LOGI(TAG, "[APP] Client cert addr : %p" , (void *)(certs_part->address));
+    // ESP_LOGE(TAG, "[APP] Client cert : %lu" , *(uint32_t*)(0x9000));
+    // // if ((*(uint32_t*)(0x9000) == 0x00000000) || (*(uint32_t*)(0x9000) == 0xFFFFFFFF))
+    // // {
+    //     ESP_LOGE(TAG, "[APP] No Client cert found: %lu" , *(uint32_t*)(0x9000));
+    //     // return;
+    // // }
+    // if ((*(uint32_t*)(certs_part->address) == 0x00000000) || (*(uint32_t*)(certs_part->address) == 0xFFFFFFFF))
+    // {
+    //     ESP_LOGE(TAG, "[APP] No Client cert found: %lu" , *(uint32_t*)(certs_part->address));
+    //     return;
+    // }
+
+    nvs_handle_t nvs_handle;
+    esp_err_t err;
+    static char sanity_string[12] = {0xff};
+    // Open
+    // err = nvs_open(CERTS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    nvs_flash_init_partition(CERTS_NAMESPACE);
+    err = nvs_open_from_partition(CERTS_NAMESPACE, CERTS_NAMESPACE, NVS_READONLY, &nvs_handle);
+
+    if (err != ESP_OK) 
+    {
+        ESP_LOGE(TAG, "Failed to open NVS. Err: 0x%4X", err);
+        return ;//err;
+    }
+        
+    size_t required_size = 0;  // value will default to 0, if not set yet in NVS
+
+    err = nvs_get_str(nvs_handle, "sanity", NULL, &required_size);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) 
+    {
+        ESP_LOGE(TAG, "Failed to get NVS sanity string");
+        return ;//err;
+    }
+    printf("sanity length: %d\n", required_size);
+    err = nvs_get_str(nvs_handle, "sanity", sanity_string, &required_size);
+    if (err != ESP_OK) 
+    {
+        ESP_LOGE(TAG, "Failed to load NVS sanity string");
+        return ;//err;
+    }
+    printf("sanity string: %s\n", sanity_string);
+    required_size = 0;
+    // obtain required memory space to store blob being read from NVS
+    err = nvs_get_str(nvs_handle, "client_crt", NULL, &required_size);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) 
+    {
+        ESP_LOGE(TAG, "Failed to get NVS client_crt blob: 0x%04X", err);
+        return ;//err;
+    }
+    ESP_LOGI(TAG, "client key length: %d", required_size);
+    if (required_size == 0) 
+    {
+        ESP_LOGE(TAG, "Partition empty!");
+    } 
+    else 
+    {
+        err = nvs_get_str(nvs_handle, "client_crt", client_crt_arr, &required_size);
+        if (err != ESP_OK) 
+        {
+            ESP_LOGE(TAG, "Failed to load NVS client_crt blob: 0x%04X", err);
+            return ;//err;
+        }
+        ESP_LOGI(TAG, "Loaded NVS client_crt blob");
+        ESP_LOGI(TAG, "%s", client_crt_arr);
+    }
+    required_size = 0;
+    // obtain required memory space to store blob being read from NVS
+    err = nvs_get_str(nvs_handle, "client_key", NULL, &required_size);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) 
+    {
+        ESP_LOGE(TAG, "Failed to get NVS client_key blob: 0x%04X", err);
+        return ;//err;
+    }
+    printf("client key length: %d\n", required_size);
+    if (required_size == 0) 
+    {
+        printf("Partition empty!\n");
+    } 
+    else 
+    {
+        err = nvs_get_str(nvs_handle, "client_key", client_key_arr, &required_size);
+        if (err != ESP_OK) 
+        {
+            ESP_LOGE(TAG, "Failed to load NVS client_key blob: 0x%04X", err);
+            return ;//err;
+        }
+        ESP_LOGI(TAG, "Loaded NVS client_key blob");
+        ESP_LOGI(TAG, "%s", client_key_arr);
+    }
+    // Close
+    nvs_close(nvs_handle);
+
     const esp_mqtt_client_config_t mqtt_cfg = {
         .broker = {
             .address.uri = BROKER_URI,
             .verification.certificate = (const char *)ca_start
-            // .verification.skip_cert_common_name_check = true
         },
         .credentials = {
-            .username = broker_username,
-            .authentication.password = broker_password,
-            .client_id = client_id
+            .authentication = {
+                // .certificate = (const char *)client_cert_pem_start,
+                // .key = (const char *)client_key_pem_start,
+                .certificate = (const char *)client_crt_arr,
+                .key = (const char *)client_key_arr
+            }
         }
     };
 
@@ -211,6 +324,115 @@ static void TelemTask(void *arg)
     }
 }
 
+// static void init_spiffs(void)
+// {
+//     ESP_LOGI(TAG, "Initializing SPIFFS");
+
+//     esp_vfs_spiffs_conf_t conf = {
+//       .base_path = "/spiffs",
+//       .partition_label = NULL,
+//       .max_files = 5,
+//       .format_if_mount_failed = true
+//     };
+
+//     // Use settings defined above to initialize and mount SPIFFS filesystem.
+//     // Note: esp_vfs_spiffs_register is an all-in-one convenience function.
+//     esp_err_t ret = esp_vfs_spiffs_register(&conf);
+
+//     if (ret != ESP_OK) {
+//         if (ret == ESP_FAIL) {
+//             ESP_LOGE(TAG, "Failed to mount or format filesystem");
+//         } else if (ret == ESP_ERR_NOT_FOUND) {
+//             ESP_LOGE(TAG, "Failed to find SPIFFS partition");
+//         } else {
+//             ESP_LOGE(TAG, "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
+//         }
+//         return;
+//     }
+
+// #ifdef CONFIG_EXAMPLE_SPIFFS_CHECK_ON_START
+//     ESP_LOGI(TAG, "Performing SPIFFS_check().");
+//     ret = esp_spiffs_check(conf.partition_label);
+//     if (ret != ESP_OK) {
+//         ESP_LOGE(TAG, "SPIFFS_check() failed (%s)", esp_err_to_name(ret));
+//         return;
+//     } else {
+//         ESP_LOGI(TAG, "SPIFFS_check() successful");
+//     }
+// #endif
+
+//     size_t total = 0, used = 0;
+//     ret = esp_spiffs_info(conf.partition_label, &total, &used);
+//     if (ret != ESP_OK) {
+//         ESP_LOGE(TAG, "Failed to get SPIFFS partition information (%s). Formatting...", esp_err_to_name(ret));
+//         esp_spiffs_format(conf.partition_label);
+//         return;
+//     } else {
+//         ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
+//     }
+
+//     // Check consistency of reported partiton size info.
+//     if (used > total) {
+//         ESP_LOGW(TAG, "Number of used bytes cannot be larger than total. Performing SPIFFS_check().");
+//         ret = esp_spiffs_check(conf.partition_label);
+//         // Could be also used to mend broken files, to clean unreferenced pages, etc.
+//         // More info at https://github.com/pellepl/spiffs/wiki/FAQ#powerlosses-contd-when-should-i-run-spiffs_check
+//         if (ret != ESP_OK) {
+//             ESP_LOGE(TAG, "SPIFFS_check() failed (%s)", esp_err_to_name(ret));
+//             return;
+//         } else {
+//             ESP_LOGI(TAG, "SPIFFS_check() successful");
+//         }
+//     }
+
+//     // Use POSIX and C standard library functions to work with files.
+//     // First create a file.
+//     ESP_LOGI(TAG, "Opening file");
+//     FILE* f = fopen("/spiffs/hello.txt", "w");
+//     if (f == NULL) {
+//         ESP_LOGE(TAG, "Failed to open file for writing");
+//         return;
+//     }
+//     fprintf(f, "Hello World!\n");
+//     fclose(f);
+//     ESP_LOGI(TAG, "File written");
+
+//     // Check if destination file exists before renaming
+//     struct stat st;
+//     if (stat("/spiffs/foo.txt", &st) == 0) {
+//         // Delete it if it exists
+//         unlink("/spiffs/foo.txt");
+//     }
+
+//     // Rename original file
+//     ESP_LOGI(TAG, "Renaming file");
+//     if (rename("/spiffs/hello.txt", "/spiffs/foo.txt") != 0) {
+//         ESP_LOGE(TAG, "Rename failed");
+//         return;
+//     }
+
+//     // Open renamed file for reading
+//     ESP_LOGI(TAG, "Reading file");
+//     f = fopen("/spiffs/foo.txt", "r");
+//     if (f == NULL) {
+//         ESP_LOGE(TAG, "Failed to open file for reading");
+//         return;
+//     }
+//     char line[64];
+//     fgets(line, sizeof(line), f);
+//     fclose(f);
+//     // strip newline
+//     char* pos = strchr(line, '\n');
+//     if (pos) {
+//         *pos = '\0';
+//     }
+//     ESP_LOGI(TAG, "Read from file: '%s'", line);
+
+//     // All done, unmount partition and disable SPIFFS
+//     esp_vfs_spiffs_unregister(conf.partition_label);
+//     ESP_LOGI(TAG, "SPIFFS unmounted");
+// }
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "[APP] Startup..");
@@ -235,6 +457,17 @@ void app_main(void)
     esp_log_level_set("TRANSPORT", ESP_LOG_VERBOSE);
     esp_log_level_set("OUTBOX", ESP_LOG_VERBOSE);
 
+    uint8_t MacAddress[8];
+	if (esp_efuse_mac_get_default(MacAddress) != ESP_OK)
+    {
+		ESP_LOGI(TAG, "Unable to read MAC address");
+    }
+	else
+    {
+		ESP_LOGI(TAG, "MAC address: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X", \
+            (uint16_t)MacAddress[0], (uint16_t)MacAddress[1], (uint16_t)MacAddress[2], (uint16_t)MacAddress[3], \
+            (uint16_t)MacAddress[4], (uint16_t)MacAddress[5], (uint16_t)MacAddress[6], (uint16_t)MacAddress[7]);
+    }
     // ESP_ERROR_CHECK(nvs_flash_init());
     // ESP_ERROR_CHECK(esp_netif_init());
     // ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -260,7 +493,7 @@ void app_main(void)
         ESP_LOGE(TAG, "semaphore creation failed");
     }
     TaskHandle_t telem_task_handle = NULL;
-    xTaskCreate(TelemTask, "TelemTask", 2024, NULL, 1, telem_task_handle);
+    xTaskCreate(TelemTask, "TelemTask", 2024, NULL, 1, &telem_task_handle);
 
 
     // const BaseType_t APP_CORE = 1;
