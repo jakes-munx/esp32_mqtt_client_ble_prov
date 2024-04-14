@@ -8,8 +8,3 @@ set(EXTRA_COMPONENT_DIRS $ENV{IDF_PATH}/examples/common_components/protocol_exam
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(mqtt_ssl)
-
-target_add_binary_data(mqtt_ssl.elf "main/gtsr1.pem" TEXT)
-target_add_binary_data(mqtt_ssl.elf "client_certs/client.crt" TEXT)
-target_add_binary_data(mqtt_ssl.elf "client_certs/client.key" TEXT)
-

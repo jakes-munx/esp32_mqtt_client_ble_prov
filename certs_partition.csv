@@ -1,5 +1,6 @@
 key,type,encoding,value
 certs,namespace,,
-client_key,file,string,client_certs/client.key
+ca_crt,file,string,client_certs/gtsr1.pem
 client_crt,file,string,client_certs/client.crt
+client_key,file,string,client_certs/client.key
 sanity,data,string,"hello there"

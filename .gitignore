@@ -26,12 +26,12 @@ build
 *.bak
 
 # certificates
-.crt
-.key
-.srl
-.csr
+*.crt
+*.key
+*.srl
+*.csr
 
-.bin
+*.bin
 
 # VSCode related
 .cortex-debug.*
