@@ -6,6 +6,7 @@ build
 
 # Lists
 *.map
+*.old
 
 # Object files
 *.o

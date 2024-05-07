@@ -49,7 +49,7 @@
          keep = !keep, count++) \
             for (item = (array) + count; keep; keep = !keep) 
 
-#define SEND_TELEM_MAC  0
+#define SEND_TELEM_MAC  1
 
 #define CERTS_NAMESPACE "certs"
 #define SEND_TELEMTRY_PERIOD_SECONDS    5
@@ -72,6 +72,9 @@ char sanity_arr[12] = {0xFF};
 
 static uint8_t MacAddress[8];
 
+temperature_sensor_handle_t temp_sensor = NULL;
+temperature_sensor_config_t temp_sensor_config = TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 50);
+
 typedef struct DeviceConfigT
 {
     const char      *p_name;
@@ -86,7 +89,14 @@ DeviceConfigT device_configs[] = {
     { .p_name = "sanity",       .p_arr = sanity_arr,     .size = 12}
 };
 
-static char telem_data = 'A';
+typedef struct TelemDataT
+{
+    char  data[10];         // Generic data string
+    float espTemp;          // Temperature read by the esp32
+
+} TelemDataT;
+
+TelemDataT telem_data = {0};
 static bool is_send_telem = false;
 
 #define MAX_JSON_SIZE 128
@@ -113,13 +123,22 @@ static void send_telemetery(esp_mqtt_client_handle_t client)
     time_t unix_time = GetUnixTime();
     uint16_t json_size = sprintf(telem_json, "{");
 #if SEND_TELEM_MAC
-    json_size += sprintf(telem_json + json_size, "\"MAC\":\"%02X%02X%02X%02X%02X%02X\",",  \
-            MacAddress[0],MacAddress[1],MacAddress[2],MacAddress[3],MacAddress[4],MacAddress[5]);
+    json_size += sprintf(telem_json + json_size, "\"MAC\":\"%02X%02X%02X%02X%02X%02X\"",  \
+        MacAddress[0],MacAddress[1],MacAddress[2],MacAddress[3],MacAddress[4],MacAddress[5]);
 #endif
-    json_size += sprintf(telem_json + json_size, "\"time\":%lld,\"data\":\"%s\"}",  \
-            unix_time,  \
-            &telem_data     \
-            );
+    json_size += sprintf(telem_json + json_size, ",\"time\":%lld",  \
+        unix_time);
+    if (telem_data.data[0] != 0xFF)
+    {
+        json_size += sprintf(telem_json + json_size, ",\"data\":\"%s\"",  \
+            telem_data.data);
+    }
+    if (telem_data.espTemp != 0xFFFFFFFF)
+    {
+        json_size += sprintf(telem_json + json_size, ",\"espTemp\":%.2f",  \
+            telem_data.espTemp);
+    }
+    json_size += sprintf(telem_json + json_size, "}");
     if (json_size > MAX_JSON_SIZE)
     {
         ESP_LOGW(TAG,"Telemetry data too large, concatenated from %d to %d bytes", json_size, MAX_JSON_SIZE);
@@ -127,6 +146,7 @@ static void send_telemetery(esp_mqtt_client_handle_t client)
     }
     int msg_id = esp_mqtt_client_publish(client, telem_topic, telem_json, json_size, 0, 0);
     ESP_LOGI(TAG, "telemetry sent with msg_id=%d", msg_id);
+    memset(&telem_data, 0xFF, sizeof(telem_data));  // Reset telemetry object
 }
 
 /*
@@ -169,7 +189,6 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
         case MQTT_EVENT_SUBSCRIBED:
             ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
-            send_telemetery(client);
             break;
         case MQTT_EVENT_UNSUBSCRIBED:
             ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
@@ -276,10 +295,16 @@ static void TelemTask(void *arg)
         xSemaphoreTake( sem_telem, xDelay_ticks);
         ESP_LOGD(TAG, "Sending data");
         // ESP_ERROR_CHECK( esp_task_wdt_reset() );
-        if (telem_data < 'Z')
-            telem_data++;
+        // memset(&telem_data, 0xFF, sizeof(telem_data));
+#ifdef CONFIG_IDF_TARGET_ESP32C3
+        ESP_ERROR_CHECK(temperature_sensor_get_celsius(temp_sensor, &telem_data.espTemp));
+        ESP_LOGI(TAG, "Temperature value %.02f ℃", telem_data.espTemp);
+#else
+        if ((telem_data.data[0] >= 'A') && (telem_data.data[0] < 'Z'))
+            telem_data.data[0]++;
         else
-            telem_data = 'A';
+            telem_data.data[0]= 'A';
+#endif
         send_telemetery(mqtt_client);
     }
 }
@@ -290,8 +315,6 @@ void app_main(void)
     ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
     ESP_LOGI(TAG, "[APP] IDF version: %s", esp_get_idf_version());
 #ifdef CONFIG_IDF_TARGET_ESP32C3
-    temperature_sensor_handle_t temp_sensor = NULL;
-    temperature_sensor_config_t temp_sensor_config = TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 50);
     ESP_ERROR_CHECK(temperature_sensor_install(&temp_sensor_config, &temp_sensor));
     ESP_ERROR_CHECK(temperature_sensor_enable(temp_sensor));
     float tsens_value;
