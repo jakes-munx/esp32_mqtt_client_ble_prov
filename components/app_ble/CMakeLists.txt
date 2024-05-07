@@ -5,6 +5,7 @@ idf_component_register(SRCS
 
                     PRIV_REQUIRES
                         "qrcode"
+                        "app_globals"
                         
                     REQUIRES esp_wifi
                     REQUIRES nvs_flash
