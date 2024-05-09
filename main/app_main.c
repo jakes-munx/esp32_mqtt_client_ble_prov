@@ -139,25 +139,6 @@ static void mqtt_app_start(void)
     ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
 
     mqtt_init((const char *)ca_crt_arr, (const char *)client_crt_arr, (const char *)client_key_arr);
-
-    // const esp_mqtt_client_config_t mqtt_cfg = {
-    //     .broker = {
-    //         .address.uri = BROKER_URI,
-    //         .verification.certificate = (const char *)ca_crt_arr
-    //     },
-    //     .credentials = {
-    //         .authentication = {
-    //             .certificate = (const char *)client_crt_arr,
-    //             .key = (const char *)client_key_arr
-    //         }
-    //     }
-    // };
-
-    // ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
-    // mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
-    // /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
-    // esp_mqtt_client_register_event(mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-    // esp_mqtt_client_start(mqtt_client);
 }
 
 static void TelemTask(void *arg)
