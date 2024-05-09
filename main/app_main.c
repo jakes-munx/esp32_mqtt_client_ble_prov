@@ -42,7 +42,7 @@
 #include "app_ble.h"
 #include "app_time.h"
 #include "app_mqtt.h"
-
+#include "app_uart.h"
 
 static const uint32_t telem_send_period_ms = SEND_TELEMTRY_PERIOD_SECONDS * 1000;
 
@@ -205,6 +205,8 @@ void app_main(void)
 
     InitTime();
 
+    uart_init();
+    
     mqtt_app_start();
 
     // esp_task_wdt_config_t wdt_config = {.timeout_ms = 10000, .idle_core_mask = 0, .trigger_panic = true};
