@@ -1,9 +1,8 @@
 idf_component_register(SRCS 
-                        "app_uart.c"
+                        "app_b_ag.c"
                     INCLUDE_DIRS 
                         "include"
                     
                     PRIV_REQUIRES
                         "app_globals"
-                        "app_b_ag"
-                        "driver")
+                        "app_uart")

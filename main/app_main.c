@@ -42,7 +42,7 @@
 #include "app_ble.h"
 #include "app_time.h"
 #include "app_mqtt.h"
-#include "app_uart.h"
+#include "app_b_ag.h"
 
 static const uint32_t telem_send_period_ms = SEND_TELEMTRY_PERIOD_SECONDS * 1000;
 
@@ -180,13 +180,16 @@ void app_main(void)
 #endif
 
     esp_log_level_set("*", ESP_LOG_INFO);
-    esp_log_level_set("esp-tls", ESP_LOG_VERBOSE);
-    esp_log_level_set("MQTT_CLIENT", ESP_LOG_VERBOSE);
+    esp_log_level_set("esp-tls", ESP_LOG_INFO);
+    esp_log_level_set("MQTT_CLIENT", ESP_LOG_INFO);
+    esp_log_level_set("TRANSPORT_BASE", ESP_LOG_INFO);
+    esp_log_level_set("TRANSPORT", ESP_LOG_INFO);
+    esp_log_level_set("OUTBOX", ESP_LOG_INFO);
     esp_log_level_set("APP_MAIN", ESP_LOG_VERBOSE);
     esp_log_level_set("APP_BLE", ESP_LOG_VERBOSE);
-    esp_log_level_set("TRANSPORT_BASE", ESP_LOG_VERBOSE);
-    esp_log_level_set("TRANSPORT", ESP_LOG_VERBOSE);
-    esp_log_level_set("OUTBOX", ESP_LOG_VERBOSE);
+    esp_log_level_set("APP_TIME", ESP_LOG_VERBOSE);
+    esp_log_level_set("APP_UART", ESP_LOG_VERBOSE);
+    esp_log_level_set("APP_B_AG", ESP_LOG_VERBOSE);
 
 	if (esp_efuse_mac_get_default(mac_address) != ESP_OK)
     {
@@ -201,25 +204,24 @@ void app_main(void)
     }
 
     /* Attempt to connect to Wi-Fi, or else wait for user to provide credentials */
-    ble_prov_wifi_init();
+    // ble_prov_wifi_init();
 
-    InitTime();
+    // InitTime();
 
-    uart_init();
-    
-    mqtt_app_start();
+    b_ag_init();
+
+    // mqtt_app_start();
 
     // esp_task_wdt_config_t wdt_config = {.timeout_ms = 10000, .idle_core_mask = 0, .trigger_panic = true};
     // ESP_ERROR_CHECK(esp_task_wdt_init(&wdt_config));
 
-    ESP_LOGI(TAG, "***Creating resources..");
-    sem_telem = xSemaphoreCreateBinary();
-    if( sem_telem == NULL )
-    {
-        ESP_LOGE(TAG, "semaphore creation failed");
-    }
-    TaskHandle_t telem_task_handle = NULL;
-    xTaskCreate(TelemTask, "TelemTask", 2024, NULL, 1, &telem_task_handle);
+    // sem_telem = xSemaphoreCreateBinary();
+    // if( sem_telem == NULL )
+    // {
+    //     ESP_LOGE(TAG, "semaphore creation failed");
+    // }
+    // TaskHandle_t telem_task_handle = NULL;
+    // xTaskCreate(TelemTask, "TelemTask", 2024, NULL, 1, &telem_task_handle);
 
 
     // const BaseType_t APP_CORE = 1;
