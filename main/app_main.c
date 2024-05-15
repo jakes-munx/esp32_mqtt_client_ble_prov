@@ -79,8 +79,9 @@ DeviceConfigT device_configs[] = {
 
 static bool is_send_telem = false;
 
-
-SemaphoreHandle_t sem_telem;
+TaskHandle_t telem_task_handle = NULL;
+// SemaphoreHandle_t sem_data_ready;
+TimerHandle_t timer_telem;
 
 // User handler for Watchdog Timer:
 // If the watchdog timer is triggered, reboot.
@@ -92,9 +93,10 @@ extern void esp_task_wdt_isr_user_handler(void)
 void TelemTimerCallback( TimerHandle_t xTimer )
 {
     is_send_telem = true;
+    xTaskNotify( b_ag_cmd_task_handle, GET_ENG_DATA, eSetBits);
 }
 
-static void mqtt_app_start(void)
+static void MqttAppStart(void)
 {
     nvs_handle_t nvs_handle;
     esp_err_t err;
@@ -138,36 +140,43 @@ static void mqtt_app_start(void)
 
     ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
 
-    mqtt_init((const char *)ca_crt_arr, (const char *)client_crt_arr, (const char *)client_key_arr);
+    MqttInit((const char *)ca_crt_arr, (const char *)client_crt_arr, (const char *)client_key_arr);
 }
 
 static void TelemTask(void *arg)
 {
-    const TickType_t xDelay_ticks = pdMS_TO_TICKS( telem_send_period_ms );
+    BaseType_t xResult;
     ESP_LOGD(TAG, "Telem task entered");
+    xTaskNotify( b_ag_cmd_task_handle, GET_ENG_INFO, eSetBits); // Get energizer info on startup
     while (1)
     {
-        xSemaphoreTake( sem_telem, xDelay_ticks);
-        ESP_LOGD(TAG, "Sending data");
+        // xSemaphoreTake(sem_data_ready, portMAX_DELAY);
+        xResult = ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
         // ESP_ERROR_CHECK( esp_task_wdt_reset() );
-        TelemDataT telem_data = {.data = {0xFF}, .espTemp = 0xFFFFFFFF};
-        // memset(&telem_data, 0xFF, sizeof(telem_data));
+        if (xResult == ENG_TELEM_READY)
+        {
+            ESP_LOGD(TAG, "Sending telemetry");
+            TelemDataT telem_data = {.data = {0xFF}, .espTemp = 0xFFFFFFFF};
 #ifdef CONFIG_IDF_TARGET_ESP32C3
-        ESP_ERROR_CHECK(temperature_sensor_get_celsius(temp_sensor, &telem_data.espTemp));
-        ESP_LOGI(TAG, "Temperature value %.02f ℃", telem_data.espTemp);
-#else
-        if ((telem_data.data[0] >= 'A') && (telem_data.data[0] < 'Z'))
-            telem_data.data[0]++;
-        else
-            telem_data.data[0]= 'A';
+            ESP_ERROR_CHECK(temperature_sensor_get_celsius(temp_sensor, &telem_data.espTemp));
+            ESP_LOGI(TAG, "Temperature value %.02f ℃", telem_data.espTemp);
 #endif
-        buffer_telem_data(&telem_data);
-        send_telemetery();
+            BufferTelemData(&telem_data);
+            SendTelemetery();
+            is_send_telem = false;
+        }
+        else if (xResult == ENG_INFO_READY)
+        {
+            ESP_LOGD(TAG, "Sending device info");
+            SendDeviceInfo();
+        }
     }
 }
 
 void app_main(void)
 {
+    const TickType_t telem_send_period_ticks = pdMS_TO_TICKS( telem_send_period_ms );
+
     ESP_LOGI(TAG, "[APP] Startup..");
     ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
     ESP_LOGI(TAG, "[APP] IDF version: %s", esp_get_idf_version());
@@ -188,8 +197,8 @@ void app_main(void)
     esp_log_level_set("APP_MAIN", ESP_LOG_VERBOSE);
     esp_log_level_set("APP_BLE", ESP_LOG_VERBOSE);
     esp_log_level_set("APP_TIME", ESP_LOG_VERBOSE);
-    esp_log_level_set("APP_UART", ESP_LOG_VERBOSE);
-    esp_log_level_set("APP_B_AG", ESP_LOG_VERBOSE);
+    esp_log_level_set("APP_UART", ESP_LOG_INFO);
+    esp_log_level_set("APP_B_AG", ESP_LOG_INFO);
 
 	if (esp_efuse_mac_get_default(mac_address) != ESP_OK)
     {
@@ -204,25 +213,39 @@ void app_main(void)
     }
 
     /* Attempt to connect to Wi-Fi, or else wait for user to provide credentials */
-    // ble_prov_wifi_init();
+    BleProvWifiInit();
 
-    // InitTime();
+    InitTime();
 
-    b_ag_init();
+    BAgInit();
 
-    // mqtt_app_start();
+    MqttAppStart();
 
-    // esp_task_wdt_config_t wdt_config = {.timeout_ms = 10000, .idle_core_mask = 0, .trigger_panic = true};
-    // ESP_ERROR_CHECK(esp_task_wdt_init(&wdt_config));
+/*
+    esp_task_wdt_config_t wdt_config = {.timeout_ms = 10000, .idle_core_mask = 0, .trigger_panic = true};
+    ESP_ERROR_CHECK(esp_task_wdt_init(&wdt_config));
+*/
 
-    // sem_telem = xSemaphoreCreateBinary();
-    // if( sem_telem == NULL )
+    // sem_data_ready = xSemaphoreCreateBinary();
+    // if( sem_data_ready == NULL )
     // {
     //     ESP_LOGE(TAG, "semaphore creation failed");
     // }
-    // TaskHandle_t telem_task_handle = NULL;
-    // xTaskCreate(TelemTask, "TelemTask", 2024, NULL, 1, &telem_task_handle);
+    
+    timer_telem = xTimerCreate("Telem Timer", telem_send_period_ticks, pdTRUE, NULL, TelemTimerCallback);
+    if (timer_telem == NULL)
+    {
+        ESP_LOGE(TAG, "timer creation failed");
+    }
+    else 
+    {
+        if( xTimerStart(timer_telem, 0 ) != pdPASS )
+        {
+            ESP_LOGE(TAG, "failed to start timer");
+        }
+    }
 
+    xTaskCreate(TelemTask, "TelemTask", 2024, NULL, 1, &telem_task_handle);
 
     // const BaseType_t APP_CORE = 1;
     // xTaskCreatePinnedToCore(

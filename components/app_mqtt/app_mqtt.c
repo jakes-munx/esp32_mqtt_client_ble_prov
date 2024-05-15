@@ -18,19 +18,22 @@
 #include "esp_task_wdt.h"
 #include "esp_mac.h"
 
-#include "app_globals.h"
 #include "app_mqtt.h"
+#include "app_globals.h"
+#include "app_b_ag.h"
 #include "app_time.h"
 
 static esp_mqtt_client_handle_t mqtt_client = NULL;
 static const char *TAG = "APP_MQTT";
 
-static const char telem_topic[] = "/topic/qos0";
+static const char TELEM_TOPIC[] = "/telem";
+static const char INFO_TOPIC[] = "/info";
 
 TelemDataT telem_data = {0};
 
-#define MAX_JSON_SIZE 128
+#define MAX_JSON_SIZE 256
 static char telem_json[MAX_JSON_SIZE];
+static char info_json[MAX_JSON_SIZE];
 
 #define BROKER_URI      "wss://mqtt.munx.xyz:443"
 
@@ -62,14 +65,15 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
-            msg_id = esp_mqtt_client_subscribe(client, "/topic/qos0", 0);
+            msg_id = esp_mqtt_client_subscribe(client, TELEM_TOPIC, 0);
             ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
-
-            msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
+            msg_id = esp_mqtt_client_subscribe(client, INFO_TOPIC, 0);
             ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+            // msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
+            // ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
 
-            msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
-            ESP_LOGI(TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
+            // msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
+            // ESP_LOGI(TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
@@ -90,7 +94,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             printf("DATA=%.*s\r\n", event->data_len, event->data);
             if (strncmp(event->data, "send telemetry please", event->data_len) == 0) {
                 ESP_LOGI(TAG, "Sending telemetry");
-                send_telemetery();
+                SendTelemetery();
             }
             break;
         case MQTT_EVENT_ERROR:
@@ -112,7 +116,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
-uint16_t mqtt_init(const char *ca_crt, const char *client_crt, const char *client_key)
+uint16_t MqttInit(const char *ca_crt, const char *client_crt, const char *client_key)
 {
     esp_err_t err;
     const esp_mqtt_client_config_t mqtt_cfg = {
@@ -145,7 +149,7 @@ uint16_t mqtt_init(const char *ca_crt, const char *client_crt, const char *clien
     return err;
 }
 
-void buffer_telem_data(TelemDataT *data_to_send)
+void BufferTelemData(TelemDataT *data_to_send)
 {
     if ((char)(data_to_send->data[0]) != 0xFF)
     {
@@ -161,7 +165,41 @@ void set_mqtt_mac(uint8_t *mqtt_mac)
     memcpy(mac_address, mqtt_mac, MAC_ADDRESS_SIZE);
 }
 
-void send_telemetery(void)
+void SendDeviceInfo(void)
+{
+    uint16_t json_size = sprintf(info_json, "{");
+#if SEND_TELEM_MAC
+    json_size += sprintf(info_json + json_size, "\"MAC\":\"%02X%02X%02X%02X%02X%02X\",",  \
+        mac_address[0],mac_address[1],mac_address[2],mac_address[3],mac_address[4],mac_address[5]);
+#endif
+    for (uint8_t en_info_index = 0; en_info_index < NUM_OF_DEV_INFO; en_info_index++)
+    {
+        if (strcmp(energizer_info_queries[en_info_index].p_data_name, "SWvers") == 0)
+        {
+            json_size += sprintf(info_json + json_size, "\"%s\":\"%d.%d.%d\",", energizer_info_queries[en_info_index].p_data_name, \
+                ((SWversionT*)energizer_info_queries[en_info_index].p_data)->major,((SWversionT*)energizer_info_queries[en_info_index].p_data)->minor,((SWversionT*)energizer_info_queries[en_info_index].p_data)->build);
+        }
+        else if (strcmp(energizer_info_queries[en_info_index].p_data_name, "Serial") == 0)
+        {
+            json_size += sprintf(info_json + json_size, "\"%s\":%"PRIu32",", energizer_info_queries[en_info_index].p_data_name, *(uint32_t*)(energizer_info_queries[en_info_index].p_data));
+        }
+        else if (*(energizer_info_queries[en_info_index].p_data) != 0xFFFF)   // If any byte in the data is not the init 0xFF, it is valid
+        {
+            json_size += sprintf(info_json + json_size, "\"%s\":%d,", energizer_info_queries[en_info_index].p_data_name, *(energizer_info_queries[en_info_index].p_data));
+        }
+    }
+    json_size--;    // Decrement 1 byte to overwrite trailing comma
+    json_size += sprintf(info_json + json_size, "}");
+    if (json_size > MAX_JSON_SIZE)
+    {
+        ESP_LOGW(TAG,"Info data too large, concatenated from %d to %d bytes", json_size, MAX_JSON_SIZE);
+        json_size = MAX_JSON_SIZE;
+    }
+    int msg_id = esp_mqtt_client_publish(mqtt_client, INFO_TOPIC, info_json, json_size, 0, 0);
+    ESP_LOGI(TAG, "info sent with msg_id=%d", msg_id);
+}
+
+void SendTelemetery(void)
 {
     time_t unix_time = GetUnixTime();
     uint16_t json_size = sprintf(telem_json, "{");
@@ -171,23 +209,28 @@ void send_telemetery(void)
 #endif
     json_size += sprintf(telem_json + json_size, "\"time\":%lld",  \
         unix_time);
-    if (telem_data.data[0] != 0xFF)
-    {
-        json_size += sprintf(telem_json + json_size, ",\"data\":\"%s\"",  \
-            telem_data.data);
-    }
+    
     if (telem_data.espTemp != 0xFFFFFFFF)
     {
-        json_size += sprintf(telem_json + json_size, ",\"espTemp\":%.2f",  \
+        json_size += sprintf(telem_json + json_size, ",\"espTemp\":%.2f,",  \
             telem_data.espTemp);
     }
+    // json_size += sprintf(telem_json + json_size, ",\"telem\":{");
+    for (uint8_t en_data_index = 0; en_data_index < NUM_OF_QUERIES; en_data_index++)
+    {
+        if (*(energizer_queries[en_data_index].p_data) != 0xFFFF)   // If any byte in the data is not the init 0xFF, it is valid
+        {
+            json_size += sprintf(telem_json + json_size, "\"%s\":%d,", energizer_queries[en_data_index].p_data_name, *(energizer_queries[en_data_index].p_data));
+        }
+    }
+    json_size--;    // Decrement 1 byte to overwrite trailing comma
     json_size += sprintf(telem_json + json_size, "}");
     if (json_size > MAX_JSON_SIZE)
     {
         ESP_LOGW(TAG,"Telemetry data too large, concatenated from %d to %d bytes", json_size, MAX_JSON_SIZE);
         json_size = MAX_JSON_SIZE;
     }
-    int msg_id = esp_mqtt_client_publish(mqtt_client, telem_topic, telem_json, json_size, 0, 0);
+    int msg_id = esp_mqtt_client_publish(mqtt_client, TELEM_TOPIC, telem_json, json_size, 0, 0);
     ESP_LOGI(TAG, "telemetry sent with msg_id=%d", msg_id);
     memset(&telem_data, 0xFF, sizeof(telem_data));  // Reset telemetry object
 }

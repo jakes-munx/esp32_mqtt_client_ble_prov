@@ -1,5 +1,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_system.h"
 #include "esp_log.h"
 #include "string.h"
@@ -11,6 +12,8 @@ static const char *TAG = "APP_B_AG";
 
 TaskHandle_t b_ag_cmd_task_handle = NULL;
 
+SemaphoreHandle_t sem_uart_rx;
+
 typedef void (*P_MESSAGEHANDLEFUNC)(BAgMsgT * const msg);
 
 typedef struct CommsMessage
@@ -19,39 +22,26 @@ typedef struct CommsMessage
 	P_MESSAGEHANDLEFUNC const handler;
 } CommsMessageT;
 
-typedef struct SWversionT
-{
-    uint8_t major;
-    uint8_t minor;
-    uint8_t build;
-} SWversionT;
-typedef struct EnergizerDataT
-{
-    SWversionT      sw_version;
-    uint8_t         hw_version;
-    SolarModelInfoT unit_type;
-    uint16_t        temp;
-    uint8_t         sw_pos;
-} EnergizerDataT;
-EnergizerDataT energizer_data = {0};
+EnergizerInfoT energizer_info;
+EnergizerDataT energizer_data;
 
-typedef struct EnergizerQueriesT
-{
-    const char      *p_data_name;
-    BAgCommandT     command_type;
-    uint8_t         command;
-    uint8_t         parameter;
-    uint8_t         n_args;
-} EnergizerQueriesT;
-static EnergizerQueriesT const energizer_queries[] = {
-    {.p_data_name = "SWvers",   .command_type = bacVERSION,                 .command = vspSW_VERSION,       .parameter = 0, .n_args = 1},
-    {.p_data_name = "HWvers",   .command_type = bacVERSION,                 .command = vspHW_VERSION,       .parameter = 0, .n_args = 1},
-    {.p_data_name = "UnitType", .command_type = bacUNIT_TYPE,               .command = vspSW_VERSION,       .parameter = 0, .n_args = 0},
-    {.p_data_name = "EngTemp",  .command_type = bacDIAGNOSTICS,             .command = dcINT_TEMPERATURE,   .parameter = 0, .n_args = 2},
-    {.p_data_name = "SwPos",    .command_type = bacAUTOMATION_DIAGNOSTICS,  .command = adrFRONT_SW_POS,     .parameter = 0, .n_args = 1},
+EnergizerQueriesT const energizer_info_queries[] = {
+    {.p_data_name = "SWvers",       .command_type = bacVERSION,                 .command = vspSW_VERSION,               .parameter = 0, .n_args = 1, .p_data = (uint16_t*)&energizer_info.sw_version},
+    {.p_data_name = "HWvers",       .command_type = bacVERSION,                 .command = vspHW_VERSION,               .parameter = 0, .n_args = 1, .p_data = (uint16_t*)&energizer_info.hw_version},
+    {.p_data_name = "UnitType",     .command_type = bacUNIT_TYPE,               .command = vspSW_VERSION,               .parameter = 0, .n_args = 0, .p_data = (uint16_t*)&energizer_info.unit_type}
 };
-#define NUM_OF_QUERIES		    (sizeof(energizer_queries)/sizeof(energizer_queries[0]))
-#define MAX_QUERY_PAYLOAD_SIZE  3
+const uint8_t NUM_OF_DEV_INFO = (sizeof(energizer_info_queries)/sizeof(energizer_info_queries[0]));
+EnergizerQueriesT const energizer_queries[] = {
+    {.p_data_name = "EngTemp",      .command_type = bacDIAGNOSTICS,             .command = dcINT_TEMPERATURE,           .parameter = 0, .n_args = 2, .p_data = &energizer_data.temp},
+    {.p_data_name = "LightADC",     .command_type = bacDIAGNOSTICS,             .command = dcLIGHT_SNSR_READING,        .parameter = 0, .n_args = 2, .p_data = &energizer_data.light_adc},
+    {.p_data_name = "LoadSens",     .command_type = bacDIAGNOSTICS,             .command = dcFINAL_LOAD_SNS_VAL,        .parameter = 0, .n_args = 2, .p_data = &energizer_data.load_sense},
+    {.p_data_name = "TargetCV",     .command_type = bacDIAGNOSTICS,             .command = dcTARGET_CV_V,               .parameter = 0, .n_args = 2, .p_data = &energizer_data.target_cv},
+    {.p_data_name = "Smooth_Vbat",  .command_type = bacDIAGNOSTICS,             .command = dcCELL_VOLTAGE_SMOOTH_MV,    .parameter = 0, .n_args = 2, .p_data = &energizer_data.smooth_vbat},
+    {.p_data_name = "Smooth_Vsol",  .command_type = bacDIAGNOSTICS,             .command = dcSOLAR_VOLTAGE_SMOOTH_MV,   .parameter = 0, .n_args = 2, .p_data = &energizer_data.smooth_vsol},
+
+    {.p_data_name = "SwPos",        .command_type = bacAUTOMATION_DIAGNOSTICS,  .command = adrFRONT_SW_POS,             .parameter = 0, .n_args = 1, .p_data = &energizer_data.sw_pos},
+};
+const uint8_t NUM_OF_QUERIES = (sizeof(energizer_queries)/sizeof(energizer_queries[0]));
 
 // Functions and structures to handle Get/Set and diagnostics data.
 static void ProcessVersion(BAgMsgT * const msg);
@@ -143,14 +133,14 @@ void ProcessVersion(BAgMsgT * const msg)
                 
         break;
         case vspSW_VERSION:     // software version.
-            energizer_data.sw_version.major = msg->buf[BAG_MSG_BYTE_VAL_INDEX];
-            energizer_data.sw_version.minor = msg->buf[BAG_MSG_BYTE_VAL_INDEX+1];
-            energizer_data.sw_version.build = msg->buf[BAG_MSG_BYTE_VAL_INDEX+2];
-            ESP_LOGI(TAG, "sw version %d.%d.%d", energizer_data.sw_version.major, energizer_data.sw_version.minor, energizer_data.sw_version.build);
+            energizer_info.sw_version.major = msg->buf[BAG_MSG_BYTE_VAL_INDEX];
+            energizer_info.sw_version.minor = msg->buf[BAG_MSG_BYTE_VAL_INDEX+1];
+            energizer_info.sw_version.build = msg->buf[BAG_MSG_BYTE_VAL_INDEX+2];
+            ESP_LOGI(TAG, "sw version %d.%d.%d", energizer_info.sw_version.major, energizer_info.sw_version.minor, energizer_info.sw_version.build);
         break;
         case vspHW_VERSION:     // Hardware version.
-            energizer_data.hw_version = msg->buf[BAG_MSG_BYTE_VAL_INDEX];      
-            ESP_LOGI(TAG, "hw version %d", energizer_data.hw_version);
+            energizer_info.hw_version = msg->buf[BAG_MSG_BYTE_VAL_INDEX];      
+            ESP_LOGI(TAG, "hw version %d", energizer_info.hw_version);
         break;
     }		
 }
@@ -159,8 +149,8 @@ void ProcessUnitType(BAgMsgT * const msg)
 {
 	if ((msg->buf[BAG_SUB_PKT_TYPE_INDEX] >= smiS20) && (msg->buf[BAG_SUB_PKT_TYPE_INDEX] < smiMAX))
     {
-        energizer_data.unit_type = msg->buf[BAG_SUB_PKT_TYPE_INDEX];
-        ESP_LOGI(TAG, "Unit type 0x%02X", energizer_data.unit_type);
+        energizer_info.unit_type = msg->buf[BAG_SUB_PKT_TYPE_INDEX];
+        ESP_LOGI(TAG, "Unit type 0x%02X", energizer_info.unit_type);
     }
 }
 
@@ -182,8 +172,28 @@ static void ProcessDiagnostics(BAgMsgT * const msg)
             energizer_data.temp = (msg->buf[BAG_MSG_BYTE_VAL_INDEX]<<8)+(msg->buf[BAG_MSG_BYTE_VAL_INDEX+1]);       
             ESP_LOGI(TAG, "Temperature %d", energizer_data.temp);
         break;
+        case dcLIGHT_SNSR_READING:
+            energizer_data.light_adc = (msg->buf[BAG_MSG_BYTE_VAL_INDEX]<<8)+(msg->buf[BAG_MSG_BYTE_VAL_INDEX+1]);       
+            ESP_LOGI(TAG, "Light ADC %d", energizer_data.light_adc);
+        break;
+        case dcFINAL_LOAD_SNS_VAL:
+            energizer_data.load_sense = (msg->buf[BAG_MSG_BYTE_VAL_INDEX]<<8)+(msg->buf[BAG_MSG_BYTE_VAL_INDEX+1]);       
+            ESP_LOGI(TAG, "Load sense %d", energizer_data.load_sense);
+        break;
+        case dcTARGET_CV_V:
+            energizer_data.target_cv = (msg->buf[BAG_MSG_BYTE_VAL_INDEX]<<8)+(msg->buf[BAG_MSG_BYTE_VAL_INDEX+1]);       
+            ESP_LOGI(TAG, "Target CV %d", energizer_data.target_cv);
+        break;
+        case dcCELL_VOLTAGE_SMOOTH_MV:
+            energizer_data.smooth_vbat = (msg->buf[BAG_MSG_BYTE_VAL_INDEX]<<8)+(msg->buf[BAG_MSG_BYTE_VAL_INDEX+1]);       
+            ESP_LOGI(TAG, "Smoothed Vbat %d", energizer_data.smooth_vbat);
+        break;
+        case dcSOLAR_VOLTAGE_SMOOTH_MV:
+            energizer_data.smooth_vsol = (msg->buf[BAG_MSG_BYTE_VAL_INDEX]<<8)+(msg->buf[BAG_MSG_BYTE_VAL_INDEX+1]);       
+            ESP_LOGI(TAG, "Smoothed Vsol %d", energizer_data.smooth_vsol);
+        break;
         default:
-            ESP_LOGI(TAG, "Unhandled DIAGNOSITC: %d value: %d",msg->buf[BAG_SUB_PKT_TYPE_INDEX], msg->buf[BAG_MSG_BYTE_VAL_INDEX]);
+            ESP_LOGI(TAG, "Unhandled DIAGNOSITC: %d value: %d",msg->buf[BAG_SUB_PKT_TYPE_INDEX], (uint16_t)((msg->buf[BAG_MSG_BYTE_VAL_INDEX]<<8) + (msg->buf[BAG_MSG_BYTE_VAL_INDEX+1])));
         break;
     }
 }
@@ -253,37 +263,78 @@ static void b_ag_cmd_task(void *arg)
     static uint8_t tx_data[MAX_QUERY_PAYLOAD_SIZE];
     while (1) 
     {
-        ESP_LOGI(TAG, "Sending BAg commands");
-        for (uint8_t query_index = 0; query_index < NUM_OF_QUERIES; query_index++)
+        xResult = ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
+        if (xResult == GET_ENG_DATA)
         {
-            ESP_LOGD(TAG, "Sending query: %s", energizer_queries[query_index].p_data_name);
-            tx_data[0] = energizer_queries[query_index].command_type;
-            tx_data[1] = energizer_queries[query_index].command;
-            tx_data[2] = energizer_queries[query_index].parameter;
-
-            SendBAg(tx_data, energizer_queries[query_index].n_args + 1);
-
-            xResult = ulTaskNotifyTake( pdTRUE, xMaxBlockTime );
-            if (xResult == 0)   // Timeout, retry once
+            ESP_LOGI(TAG, "Sending BAg commands");
+            for (uint8_t query_index = 0; query_index < NUM_OF_QUERIES; query_index++)
             {
-                ESP_LOGW(TAG, "BAg command timedout, retrying..");
+                ESP_LOGD(TAG, "Sending query: %s", energizer_queries[query_index].p_data_name);
+                tx_data[0] = energizer_queries[query_index].command_type;
+                tx_data[1] = energizer_queries[query_index].command;
+                tx_data[2] = energizer_queries[query_index].parameter;
+
                 SendBAg(tx_data, energizer_queries[query_index].n_args + 1);
-                xResult = ulTaskNotifyTake( pdTRUE, xMaxBlockTime );
-                if (xResult == 0)   // Retry timedout, stop BAg queries
+
+                if(xSemaphoreTake( sem_uart_rx, xMaxBlockTime) != pdTRUE )   // Timeout, retry once
                 {
-                    ESP_LOGE(TAG, "BAg command failed. Stopping.");
-                    break;
+                    ESP_LOGW(TAG, "BAg command timedout, retrying..");
+                    SendBAg(tx_data, energizer_queries[query_index].n_args + 1);
+                    xResult = ulTaskNotifyTake( pdTRUE, xMaxBlockTime );
+                    // if (xResult == 0)   // Retry timedout, stop BAg queries
+                    if(xSemaphoreTake( sem_uart_rx, xMaxBlockTime) != pdTRUE )   // Timeout, retry once
+                    {
+                        ESP_LOGE(TAG, "BAg command failed. Stopping.");
+                        break;
+                    }
                 }
             }
+            xTaskNotify( telem_task_handle, ENG_TELEM_READY, eSetBits);
+            // xSemaphoreGive(sem_data_ready);
         }
+        else if (xResult == GET_ENG_INFO)
+        {
+            ESP_LOGI(TAG, "Sending BAg commands");
+            for (uint8_t query_index = 0; query_index < NUM_OF_DEV_INFO; query_index++)
+            {
+                ESP_LOGD(TAG, "Sending query: %s", energizer_info_queries[query_index].p_data_name);
+                tx_data[0] = energizer_info_queries[query_index].command_type;
+                tx_data[1] = energizer_info_queries[query_index].command;
+                tx_data[2] = energizer_info_queries[query_index].parameter;
 
-        vTaskDelay(5000 / portTICK_PERIOD_MS);
+                SendBAg(tx_data, energizer_info_queries[query_index].n_args + 1);
+
+                if(xSemaphoreTake( sem_uart_rx, xMaxBlockTime) != pdTRUE )   // Timeout, retry once
+                {
+                    ESP_LOGW(TAG, "BAg command timedout, retrying..");
+                    SendBAg(tx_data, energizer_info_queries[query_index].n_args + 1);
+                    xResult = ulTaskNotifyTake( pdTRUE, xMaxBlockTime );
+                    // if (xResult == 0)   // Retry timedout, stop BAg queries
+                    if(xSemaphoreTake( sem_uart_rx, xMaxBlockTime) != pdTRUE )   // Timeout, retry once
+                    {
+                        ESP_LOGE(TAG, "BAg command failed. Stopping.");
+                        break;
+                    }
+                }
+            }
+            xTaskNotify( telem_task_handle, ENG_INFO_READY, eSetBits);
+            //xSemaphoreGive(sem_data_ready);
+        }
     }
 }
 
-void b_ag_init(void)
+void BAgInit(void)
 {
     uart_init();
+
+    memset(&energizer_info, 0xFF, sizeof(energizer_info));
+    memset(&energizer_data, 0xFF, sizeof(energizer_data));
+
+    sem_uart_rx = xSemaphoreCreateBinary();
+    if( sem_uart_rx == NULL )
+    {
+        ESP_LOGE(TAG, "semaphore creation failed");
+    }
 
     xTaskCreate(b_ag_cmd_task, "b_ag_cmd_task", 1024*2, NULL, configMAX_PRIORITIES-1, &b_ag_cmd_task_handle);
 }

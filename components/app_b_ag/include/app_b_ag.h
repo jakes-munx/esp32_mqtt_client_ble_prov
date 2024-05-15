@@ -2,13 +2,22 @@
 #define __APP_B_AG_H
 
 extern TaskHandle_t b_ag_cmd_task_handle;
+extern TaskHandle_t telem_task_handle;
+extern SemaphoreHandle_t sem_data_ready;
+extern SemaphoreHandle_t sem_uart_rx;
 
 #define STX (uint8_t)(0x02)
 #define ETX (uint8_t)(0x03)
 #define DLE (uint8_t)(0x10)
 
-#define MAX_MSG_LEN 32
-#define MIN_MSG_LEN 5
+#define MAX_MSG_LEN     32
+#define MIN_MSG_LEN     5
+
+#define GET_ENG_INFO    1
+#define GET_ENG_DATA    2
+
+#define ENG_INFO_READY   1
+#define ENG_TELEM_READY   2
 
 typedef enum
 {
@@ -313,8 +322,51 @@ typedef struct
     // BAgMsgRxStateT rxState;
 } BAgMsgT;
 
+typedef struct SWversionT
+{
+    uint8_t major;
+    uint8_t minor;
+    uint8_t build;
+} SWversionT;
+typedef struct EnergizerInfoT
+{
+    SWversionT      sw_version;
+    uint16_t        hw_version;
+    SolarModelInfoT unit_type;
+} EnergizerInfoT;
+extern EnergizerInfoT energizer_info;
 
-void b_ag_init(void);
+typedef struct EnergizerDataT
+{
+    uint16_t        temp;
+    uint16_t        light_adc;
+    uint16_t        load_sense;
+    uint16_t        target_cv;
+    uint16_t        smooth_vbat;
+    uint16_t        smooth_vsol;
+    uint16_t        sw_pos;
+} EnergizerDataT;
+extern EnergizerDataT energizer_data;
+
+typedef struct EnergizerQueriesT
+{
+    const char      *p_data_name;
+    BAgCommandT     command_type;
+    uint8_t         command;
+    uint8_t         parameter;
+    uint8_t         n_args;
+    uint16_t*       p_data;
+} EnergizerQueriesT;
+
+extern EnergizerQueriesT const energizer_info_queries[];
+extern const uint8_t  NUM_OF_DEV_INFO;
+extern EnergizerQueriesT const energizer_queries[];
+extern const uint8_t NUM_OF_QUERIES;
+
+#define MAX_QUERY_PAYLOAD_SIZE  3
+
+
+void BAgInit(void);
 BAgByteErrT ProcessRxBAgString(uint8_t * rx_buf, uint8_t rx_len);
 
 #endif // __APP_B_AG_H

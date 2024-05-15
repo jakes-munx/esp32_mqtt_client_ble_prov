@@ -51,7 +51,7 @@ static void rx_task(void *arg)
 {
     uart_event_t event;
     static const char *RX_TASK_TAG = "RX_TASK";
-    esp_log_level_set(RX_TASK_TAG, ESP_LOG_VERBOSE);
+    esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
     ESP_LOGI(RX_TASK_TAG, "Starting UART RX task");
     while (1) 
     {
@@ -67,7 +67,7 @@ static void rx_task(void *arg)
                     ESP_LOGD(RX_TASK_TAG, "Read %d bytes", length);
                     ESP_LOG_BUFFER_HEXDUMP(RX_TASK_TAG, uart_rx_buffer, length, ESP_LOG_VERBOSE);
                     ProcessRxBAgString(uart_rx_buffer, length);
-                    xTaskNotifyGive( b_ag_cmd_task_handle);
+                    xSemaphoreGive(sem_uart_rx);
                     break;
                 }
                 case UART_FIFO_OVF:

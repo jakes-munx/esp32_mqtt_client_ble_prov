@@ -233,7 +233,7 @@ static void wifi_prov_print_qr(const char *name, const char *username, const cha
     ESP_LOGI(TAG, "If QR code is not visible, copy paste the below URL in a browser.\n%s?data=%s", QRCODE_BASE_URL, payload);
 }
 
-void ble_prov_wifi_init(void)
+void BleProvWifiInit(void)
 {
     /* Initialize NVS partition */
     esp_err_t ret = nvs_flash_init();

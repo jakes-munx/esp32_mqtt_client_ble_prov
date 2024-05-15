@@ -9,9 +9,10 @@ typedef struct TelemDataT
 
 } TelemDataT;
 
-uint16_t mqtt_init(const char *ca_crt, const char *client_crt, const char *client_key);
+uint16_t MqttInit(const char *ca_crt, const char *client_crt, const char *client_key);
 void set_mqtt_mac(uint8_t *mqtt_mac);
-void buffer_telem_data(TelemDataT *data_to_send);
-void send_telemetery(void);
+void SendDeviceInfo(void);
+void BufferTelemData(TelemDataT *data_to_send);
+void SendTelemetery(void);
 
 #endif // __APP_MQTT_H
